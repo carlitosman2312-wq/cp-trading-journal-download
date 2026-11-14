@@ -24,7 +24,7 @@ jobs:
           mkdir out
           for f in $(ls incoming | grep -E '\.part[0-9]+$' | sed 's/\.part[0-9]*$//' | sort -u); do cat $(ls incoming/$f.part* | sort -V) > "out/$f"; done
           ls -la out
-          sha256sum -c incoming/SHA256SUMS --ignore-missing 2>/dev/null || (cd out && sha256sum -c ../incoming/SHA256SUMS)
+          (cd out && sha256sum -c ../incoming/SHA256SUMS)
           gh release delete "v$V" -y --cleanup-tag 2>/dev/null || true
           gh release create "v$V" out/* --title "CP Trading Journal v$V" --latest --notes-file incoming/NOTES.md
           git push origin --delete incoming
