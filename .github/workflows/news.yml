@@ -1,0 +1,59 @@
+name: News feed (economic calendar)
+
+# Mirrors the public weekly economic calendar to the "news" branch every 30 minutes,
+# where the CP Trading Journal server reads it (the source blocks Cloudflare IPs).
+on:
+  schedule:
+    - cron: '13,43 * * * *'
+  push:
+    branches: [main]
+    paths: ['.github/workflows/news.yml']
+  workflow_dispatch:
+    inputs:
+      loop:
+        description: 'Keep refreshing every 30 min for ~5.5 h, then restart itself'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: news-${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.loop)) && 'loop' || 'once' }}
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Mirror the calendar
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          LOOP: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.loop)) && '1' || '0' }}
+        run: |
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+          git config --global user.name "news-bot"; git config --global user.email "news-bot@users.noreply.github.com"
+          mirror() {
+            rm -rf out data && mkdir -p out data
+            for w in thisweek nextweek; do
+              code=$(curl -sS -A "$UA" -H 'Accept: application/json' -o "out/ff_$w.json" -w '%{http_code}' "https://nfs.faireconomy.media/ff_calendar_$w.json" || echo 000)
+              echo "$(date -u +%T) $w -> HTTP $code"
+              if [ "$code" != "200" ] || ! python3 -c "import json; d=json.load(open('out/ff_$w.json')); assert isinstance(d,list) and d" 2>/dev/null; then
+                rm -f "out/ff_$w.json"
+                curl -sfS -o "out/ff_$w.json" "https://raw.githubusercontent.com/$REPO/news/ff_$w.json" || rm -f "out/ff_$w.json"
+              fi
+            done
+            [ -n "$(ls out)" ] || { echo "nothing fetched"; return 0; }
+            cd data && git init -q -b news && cp ../out/*.json . && git add -A && git commit -qm "news feed $(date -u +%FT%TZ)" \
+              && git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" news && echo "published"; cd ..
+          }
+          mirror
+          if [ "$LOOP" = "1" ]; then
+            end=$(( $(date +%s) + 330*60 ))
+            while [ $(( $(date +%s) + 30*60 )) -lt $end ]; do sleep 1800; mirror; done
+            echo "restarting loop"
+            gh api -X POST "repos/${REPO}/actions/workflows/news.yml/dispatches" -f ref=main -f 'inputs[loop]=true'
+          fi
