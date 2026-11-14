@@ -1,0 +1,30 @@
+name: Publish installers
+
+# Installers arrive on the "incoming" branch (split into <100 MB parts); this turns them into a release and removes the branch.
+on:
+  push:
+    branches: [incoming]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: incoming
+      - name: Reassemble and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -f incoming/READY ] || { echo "not complete yet"; exit 0; }
+          V=$(cat incoming/VERSION)
+          mkdir out
+          for f in $(ls incoming | grep -E '\.part[0-9]+$' | sed 's/\.part[0-9]*$//' | sort -u); do cat $(ls incoming/$f.part* | sort -V) > "out/$f"; done
+          ls -la out
+          sha256sum -c incoming/SHA256SUMS --ignore-missing 2>/dev/null || (cd out && sha256sum -c ../incoming/SHA256SUMS)
+          gh release delete "v$V" -y --cleanup-tag 2>/dev/null || true
+          gh release create "v$V" out/* --title "CP Trading Journal v$V" --latest --notes-file incoming/NOTES.md
+          git push origin --delete incoming
